@@ -223,18 +223,9 @@ def main():
     
     TELEGRAM_TOKEN="7049629039:AAHuZvu2aQ1Ug1TZU0Wu3OEjyTP8R8JQRuw"
     
-    # app = Application.builder().token(TELEGRAM_TOKEN).build()
+    app = Application.builder().token(TELEGRAM_TOKEN).build()
     
-    from pytz import timezone  # <- pytz timezone
-    # pick your local tz if you want, e.g. Europe/Amsterdam
-    app_tz = timezone("Europe/Amsterdam")  # or timezone("UTC")
-
-    app = (
-        Application.builder()
-        .token(TELEGRAM_TOKEN)
-        .timezone(app_tz)   # <- forces pytz tz, avoids the TypeError
-        .build()
-    )
+    
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("lithium", lithium_cmd))
     app.run_polling()
