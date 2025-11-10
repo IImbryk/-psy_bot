@@ -14,6 +14,7 @@ from typing import Literal, Dict
 
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
+from pytz import timezone
 
 Sex = Literal["male", "female"]
 
@@ -34,9 +35,9 @@ def bayesian_dose_update(D_t: float, C_target: float, C_t: float,
     K = (ω^2 * S^2) / (ω^2 * S^2 + σ^2)
     D_{t+1} = D_t * (C_target / C_t)^K
     - D_t: текущая суточная доза (в тех же единицах, что и вернёте)
-    - C_target, C_t: концентрации в ОДНИХ и тех же единицах (мЭкв/л или мг/л элементарного Li)
+    - C_target, C_t: концентрации в одних и тех же единицах (мЭкв/л или мг/л элементарного Li)
     - omega ~ межиндивид. вариабельность (CV≈30% ⇒ 0.30)
-    - sigma ~ ошибка измерения (например, 0.1 мг/л; подставьте свою)
+    - sigma ~ ошибка измерения (например, 0.1 мг/л)
     - S = 1 при пропорц. связи доза→концентрация
     """
     K = (omega**2 * S**2) / (omega**2 * S**2 + sigma**2)
@@ -55,38 +56,42 @@ def ffm_janmahasatian(sex: Sex, weight_kg: float, height_cm: float) -> float:
     else:
         return 9270.0 * weight_kg / (8780.0 + 244.0 * B)
 
+
 def lithium_params_from_covariates(sex: Sex, weight_kg: float, height_cm: float, gfr_ml_min: float) -> Dict[str, float]:
     """
-    Параметры лития по мета-модели Lereclus et al. 2024:
+    Параметры лития (аппаратные) по мета-модели Lereclus et al. 2024:
       CL/F (л/ч) = 0.0734 + 0.117*(GFR/90) + 1.01*(FFM/50)
-      V1/F=22.1 л, V2=3.35 л, Q=0.42 л/ч, Ka=0.62 ч^-1 (объёмы и Ka фиксируем для справки)
-    Возвращает словарь с CL, V1, V2, Q, Ka и FFM.
+      V1/F=22.1 л, V2=3.35 л, Q=0.42 л/ч, Ka=0.62 ч^-1 (для справки)
     """
     ffm = ffm_janmahasatian(sex, weight_kg, height_cm)
-    CL = 0.0734 + 0.117 * (gfr_ml_min / 90.0) + 1.01 * (ffm / 50.0)  # л/ч (apparent)
+    CL = 0.0734 + 0.117 * (gfr_ml_min / 90.0) + 1.01 * (ffm / 50.0)  # л/ч
     return dict(CL=CL, V1=22.1, V2=3.35, Q=0.42, Ka=0.62, FFM=ffm)
 
+
 def lithium_mEq_to_mg_per_L(mEq_per_L: float) -> float:
-    """Перевод мЭкв/л → мг/л (элементарный Li): 1 мЭкв/л = 6.94 мг/л."""
+    """мЭкв/л → мг/л (элементарный Li): 1 мЭкв/л = 6.94 мг/л."""
     return mEq_per_L * 6.94
 
+
 def mg_Li_to_mg_Li2CO3(mg_elemental_li: float) -> float:
-    """Перевод мг элементарного Li → мг карбоната Li2CO3. Массовая доля Li ≈ 18.8%."""
+    """мг элементарного Li → мг Li2CO3. Массовая доля Li ≈ 18.8%."""
     return mg_elemental_li / 0.188
+
 
 def lithium_starting_daily_dose(CL_L_per_h: float, C_target_mg_per_L: float) -> float:
     """
-    Стартовая суточная доза по правилу стац. среднего: Dose_day = 24 * CL * C_target.
-    Здесь C_target — в мг/л элементарного лития.
-    Результат — мг/сут элементарного лития.
+    Стартовая суточная доза по стац. правилу: Dose_day = 24 * CL * C_target.
+    На выходе — мг/сут элементарного лития.
     """
     return 24.0 * CL_L_per_h * C_target_mg_per_L
+
 
 def round_to_step(value_mg: float, step_mg: float) -> float:
     """Округление до ближайшего шага таблетки (например, 150 мг)."""
     if step_mg <= 0:
         return value_mg
     return round(value_mg / step_mg) * step_mg
+
 
 # -----------------------------
 # Парсер параметров из сообщения
@@ -95,7 +100,7 @@ def round_to_step(value_mg: float, step_mg: float) -> float:
 def parse_kv_args(text: str) -> Dict[str, str]:
     """
     Разбирает строку вида: 'sex=male weight=75 height=175 gfr=120 target=0.8 split=2 step=150'
-    Возвращает dict.
+    Возвращает dict с ключами в нижнем регистре.
     """
     kv = {}
     for chunk in text.strip().split():
@@ -103,6 +108,7 @@ def parse_kv_args(text: str) -> Dict[str, str]:
             k, v = chunk.split("=", 1)
             kv[k.strip().lower()] = v.strip()
     return kv
+
 
 # -----------------------------
 # Хэндлеры Telegram
@@ -125,10 +131,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         "Привет! Я рассчитаю стартовую дозу карбоната лития по ковариатам.\n\n" + HELP_TEXT
     )
-def bayesian_dose_update(D_t: float, C_target: float, C_t: float,
-                         omega: float = 0.30, S: float = 1.0, sigma: float = 0.10) -> float:
-    K = (omega**2 * S**2) / (omega**2 * S**2 + sigma**2)
-    return D_t * (C_target / C_t) ** K
+
 
 async def lithium_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
@@ -151,7 +154,7 @@ async def lithium_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         ct_mg  = kv.get("ct_mg")                  # концентрация в мг/л (элемент Li)
         omega  = float(kv.get("omega", "0.30"))
         sigma  = float(kv.get("sigma", "0.10"))
-        S_par  = float(kv.get("s", "1.0"))        # <— БЫЛО "S", надо "s" (ключи в kv — строчные!)
+        S_par  = float(kv.get("s", "1.0"))        # ключи в kv — строчные!
 
         # --- Расчёты ---
         BMI = bmi(weight, height)
@@ -195,7 +198,6 @@ async def lithium_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 f"• В Li₂CO₃: **{int(per_intake_new_rounded)} мг x {split} = {int(daily_new_rounded)} мг/сут**\n"
             )
 
-        # <-- ВСТАВЛЯЕМ tdm_block В СООБЩЕНИЕ
         msg = (
             f"🧪 Расчёт стартовой дозы лития (мета-модель)\n"
             f"— Пол: {sex}\n"
@@ -203,12 +205,15 @@ async def lithium_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             f"— BMI: {BMI:.1f} кг/м²; FFM (Janmahasatian): {ffm:.1f} кг\n"
             f"— CL (апп.): {CL:.3f} л/ч\n"
             f"— Цель: {target:.2f} мЭкв/л = {C_target_mg_L:.2f} мг/л (элемент Li)\n\n"
-            f"Суточная доза (элемент Li): {daily_li_mg:.0f} мг/сут\n"
-            f"⇢ В Li₂CO₃: {daily_li2co3:.0f} мг/сут\n"
-            f"⇢ Делим на {split} приёма: ~{per_intake_li2co3:.0f} мг/приём\n"
-            f"⇢ С округлением {int(step)} мг: **{int(per_intake_li2co3_rounded)} мг x {split} = {int(daily_li2co3_rounded)} мг/сут**"
-            f"{tdm_block}"   # <— ВАЖНО: добавили блок сюда
+            f"Суточная доза (элемент Li): {daily_li_mг:.0f} мг/сут\n".replace("мг", "mg")  # только форматирование
+            + (
+                f"⇢ В Li₂CO₃: {daily_li2co3:.0f} мг/сут\n"
+                f"⇢ Делим на {split} приёма: ~{per_intake_li2co3:.0f} мг/приём\n"
+                f"⇢ С округлением {int(step)} мг: **{int(per_intake_li2co3_rounded)} мг x {split} = {int(daily_li2co3_rounded)} мг/сут**"
+            )
+            + tdm_block
         )
+
         await update.message.reply_text(msg, disable_web_page_preview=True)
 
     except Exception as e:
@@ -220,15 +225,23 @@ async def lithium_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 # -----------------------------
 
 def main():
-    
-    TELEGRAM_TOKEN="7049629039:AAHuZvu2aQ1Ug1TZU0Wu3OEjyTP8R8JQRuw"
-    
-    app = Application.builder().token(TELEGRAM_TOKEN).build()
-    
-    
+    token = os.environ.get("TELEGRAM_TOKEN")
+    if not token:
+        raise RuntimeError("Переменная окружения TELEGRAM_TOKEN не задана.")
+
+    app_tz = timezone("Europe/Amsterdam")  # pytz-tz, чтобы избежать ошибки APScheduler
+    app = (
+        Application.builder()
+        .token(token)
+        .timezone(app_tz)
+        .build()
+    )
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("lithium", lithium_cmd))
-    app.run_polling()
+
+    app.run_polling(allowed_updates=Update.ALL_TYPES)
+
 
 if __name__ == "__main__":
     main()
